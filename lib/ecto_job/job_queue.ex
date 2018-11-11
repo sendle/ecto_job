@@ -129,7 +129,7 @@ defmodule EctoJob.JobQueue do
         %__MODULE__{
           state: if(opts[:schedule], do: "SCHEDULED", else: "AVAILABLE"),
           expires: nil,
-          schedule: Keyword.get(opts, :schedule, DateTime.utc_now()),
+          schedule: Keyword.get(opts, :schedule, DateTime.utc_now()) |> DateTime.truncate(:second),
           attempt: 0,
           max_attempts: opts[:max_attempts],
           params: params,
@@ -243,7 +243,7 @@ defmodule EctoJob.JobQueue do
       Query.from(
         job in schema,
         where: job.state == "AVAILABLE",
-        order_by: [asc: job.schedule],
+        order_by: [asc: job.schedule, asc: job.id],
         lock: "FOR UPDATE SKIP LOCKED",
         limit: ^demand,
         select: [:id]
@@ -258,7 +258,10 @@ defmodule EctoJob.JobQueue do
   """
   @spec reservation_expiry(DateTime.t(), integer) :: DateTime.t()
   def reservation_expiry(now = %DateTime{}, timeout_ms) do
-    timeout_ms |> Integer.floor_div(1000) |> advance_seconds(now)
+    timeout_ms
+    |> Integer.floor_div(1000)
+    |> advance_seconds(now)
+    |> DateTime.truncate(:second)
   end
 
   @doc """
