@@ -129,7 +129,7 @@ defmodule EctoJob.JobQueue do
         %__MODULE__{
           state: if(opts[:schedule], do: "SCHEDULED", else: "AVAILABLE"),
           expires: nil,
-          schedule: Keyword.get(opts, :schedule, DateTime.utc_now()) |> DateTime.truncate(:second),
+          schedule: opts |> Keyword.get(:schedule, DateTime.utc_now()) |> DateTime.truncate(:second),
           attempt: 0,
           max_attempts: opts[:max_attempts],
           params: params,
