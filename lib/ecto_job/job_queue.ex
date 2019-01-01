@@ -72,9 +72,9 @@ defmodule EctoJob.JobQueue do
         # SCHEDULED, RESERVED, IN_PROGRESS, FAILED
         field(:state, :string)
         # Time at which reserved/in_progress jobs can be reset to SCHEDULED
-        field(:expires, :utc_datetime)
+        field(:expires, :utc_datetime_usec)
         # Time at which a scheduled job can be reserved
-        field(:schedule, :utc_datetime)
+        field(:schedule, :utc_datetime_usec)
         # Counter for number of attempts for this job
         field(:attempt, :integer)
         # Maximum attempts before this job is FAILED
@@ -220,6 +220,26 @@ defmodule EctoJob.JobQueue do
   end
 
   @doc """
+  Updates all RETRYING jobs that have been attempted the maximum number of times to `"FAILED"`.
+
+  Returns the number of jobs updated.
+  """
+  @spec fail_retrying_jobs_at_max_attempts(repo, schema, DateTime.t()) :: integer
+  def fail_retrying_jobs_at_max_attempts(repo, schema, now = %DateTime{}) do
+    {count, _} =
+      repo.update_all(
+        Query.from(
+          job in schema,
+          where: job.state in ["RETRYING"],
+          where: job.attempt >= job.max_attempts
+        ),
+        set: [state: "FAILED", expires: nil, updated_at: now]
+      )
+
+    count
+  end
+
+  @doc """
   Updates a batch of jobs in `"AVAILABLE"` state to `"RESERVED"` state with a timeout.
 
   The batch size is determined by `demand`.
@@ -229,8 +249,7 @@ defmodule EctoJob.JobQueue do
   def reserve_available_jobs(repo, schema, demand, now = %DateTime{}, timeout_ms) do
     repo.update_all(
       available_jobs(schema, demand),
-      [set: [state: "RESERVED", expires: reservation_expiry(now, timeout_ms), updated_at: now]],
-      returning: true
+      set: [state: "RESERVED", expires: reservation_expiry(now, timeout_ms), updated_at: now]
     )
   end
 
@@ -245,14 +264,14 @@ defmodule EctoJob.JobQueue do
       Query.from(
         job in schema,
         where: job.state == "AVAILABLE",
-        order_by: [asc: job.schedule],
+        order_by: [asc: job.schedule, asc: job.id],
         lock: "FOR UPDATE SKIP LOCKED",
         limit: ^demand,
         select: [:id]
       )
 
     # Ecto doesn't support subquery in where clause, so use join as workaround
-    Query.from(job in schema, join: x in subquery(query), on: job.id == x.id)
+    Query.from(job in schema, join: x in subquery(query), on: job.id == x.id, select: job)
   end
 
   @doc """
@@ -288,17 +307,15 @@ defmodule EctoJob.JobQueue do
           where: j.id == ^job.id,
           where: j.attempt == ^job.attempt,
           where: j.state == "RESERVED",
-          where: j.expires >= ^now
+          where: j.expires >= ^now,
+          select: j
         ),
-        [
-          set: [
-            attempt: job.attempt + 1,
-            state: "IN_PROGRESS",
-            expires: progress_time(now, job.attempt + 1, timeout_ms),
-            updated_at: now
-          ]
-        ],
-        returning: true
+        set: [
+          attempt: job.attempt + 1,
+          state: "IN_PROGRESS",
+          expires: increase_time(now, job.attempt + 1, timeout_ms),
+          updated_at: now
+        ]
       )
 
     case {count, results} do
@@ -322,16 +339,16 @@ defmodule EctoJob.JobQueue do
         Query.from(
           j in schema,
           where: j.id == ^job.id,
-          where: j.state == "IN_PROGRESS"
+          where: j.state == "IN_PROGRESS",
+          select: j
         ),
         [
           set: [
             state: "RETRYING",
-            schedule: progress_time(now, job.attempt + 1, timeout_ms),
+            schedule: increase_time(now, job.attempt + 1, timeout_ms),
             updated_at: now
           ]
-        ],
-        returning: true
+        ]
       )
 
     case {count, results} do
@@ -343,8 +360,8 @@ defmodule EctoJob.JobQueue do
   @doc """
   Computes the expiry time for an `"IN_PROGRESS"` and schedule time of "RETRYING" jobs based on the current time and attempt counter.
   """
-  @spec progress_time(DateTime.t(), integer, integer) :: DateTime.t()
-  def progress_time(now = %DateTime{}, attempt, timeout_ms) do
+  @spec increase_time(DateTime.t(), integer, integer) :: DateTime.t()
+  def increase_time(now = %DateTime{}, attempt, timeout_ms) do
     timeout_ms |> Kernel.*(attempt) |> Integer.floor_div(1000) |> advance_seconds(now)
   end
 
