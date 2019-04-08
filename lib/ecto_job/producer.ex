@@ -183,6 +183,6 @@ defmodule EctoJob.Producer do
   defp dispatch_jobs(state = %State{}, now) do
     %{repo: repo, schema: schema, demand: demand, reservation_timeout: timeout} = state
     {count, jobs} = JobQueue.reserve_available_jobs(repo, schema, demand, now, timeout)
-    {:noreply, jobs, %{state | demand: Enum.max(0, demand - count)}}
+    {:noreply, jobs, %{state | demand: Enum.max([0, demand - count])}}
   end
 end
